@@ -231,16 +231,9 @@ class GatedDeltaNet(MegatronModule):
 
         self.reset_parameters()
 
-        # Use the FLA kernel only when it is actually installed.  On Ascend/NPU
-        # (where the upstream FLA Triton kernels are unsupported), the forward
-        # path below uses the torch-native implementation instead.
+        # Use the FLA kernel only when it is actually installed.
+        # Platform-specific handling is delegated to TE Plugin system.
         self.fla_supported = HAVE_FLA
-        try:
-            import torch_npu
-            if torch.npu.is_available():
-                self.fla_supported = False
-        except:
-            pass
 
     def reset_parameters(self):
         """Reset the parameters."""
@@ -391,45 +384,39 @@ class GatedDeltaNet(MegatronModule):
 
         nvtx_range_push(suffix="gated_delta_rule")
 
-        # Try to use TE Plugin system for optimized implementations
-        # 优先使用 TransformerEngine 优化实现 (AscendC/Triton/Torch)
+        # Strategy 1: Use TE Plugin for optimized platform-specific implementations
+        # TE Plugin automatically selects the best implementation (AscendC/Triton/Torch)
+        # and handles platform detection and fallback internally
         if HAVE_TE_PLUGIN and not self.config.deterministic_mode:
-            try:
-                op_manager = OpManager()
-                core_attn_out, last_recurrent_state = op_manager.call(
-                    "gated_delta_net_forward",
-                    query=query,
-                    key=key,
-                    value=value,
-                    g=g,
-                    beta=beta,
-                    initial_state=None,
-                    output_final_state=False,
-                    use_qk_l2norm=False,  # L2 norm already applied externally
-                )
-            except Exception as e:
-                # Fallback to original implementations
-                logger.warning(f"TE Plugin GDN failed, falling back: {e}")
-                if self.fla_supported:
-                    core_attn_out, last_recurrent_state = chunk_gated_delta_rule(
-                        query, key, value, g=g, beta=beta,
-                        initial_state=None, output_final_state=False,
-                        use_qk_l2norm_in_kernel=False,
-                    )
-                else:
-                    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
-                        query, key, value, g=g, beta=beta,
-                        initial_state=None, output_final_state=False,
-                        use_qk_l2norm_in_kernel=False,
-                    )
-        elif self.config.deterministic_mode or not self.fla_supported:
+            op_manager = OpManager()
+            core_attn_out, last_recurrent_state = op_manager.call(
+                "gated_delta_net_forward",
+                query=query,
+                key=key,
+                value=value,
+                g=g,
+                beta=beta,
+                initial_state=None,
+                output_final_state=False,
+                use_qk_l2norm=False,  # L2 norm already applied externally
+            )
+        # Strategy 2: Deterministic mode requires pure PyTorch implementation
+        elif self.config.deterministic_mode:
             core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
                 query, key, value, g=g, beta=beta,
                 initial_state=None, output_final_state=False,
                 use_qk_l2norm_in_kernel=False,
             )
-        else:
+        # Strategy 3: No TE Plugin available, use FLA Triton kernel if supported
+        elif self.fla_supported:
             core_attn_out, last_recurrent_state = chunk_gated_delta_rule(
+                query, key, value, g=g, beta=beta,
+                initial_state=None, output_final_state=False,
+                use_qk_l2norm_in_kernel=False,
+            )
+        # Strategy 4: Fallback to pure PyTorch implementation
+        else:
+            core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
                 query, key, value, g=g, beta=beta,
                 initial_state=None, output_final_state=False,
                 use_qk_l2norm_in_kernel=False,
