@@ -178,3 +178,12 @@ register(
     impl="megatron.plugin.Ascend.transformer.transformer_config.NPUTransformerConfig",
     vendor="npu",
 )
+
+# =============================================================================
+# SSM - gated_delta_net
+# =============================================================================
+register(
+    target="megatron.core.ssm.gated_delta_net.GatedDeltaNet.forward",
+    impl="megatron.plugin.Ascend.ssm.gated_delta_net.gated_delta_net_forward",
+    vendor="npu",
+)
