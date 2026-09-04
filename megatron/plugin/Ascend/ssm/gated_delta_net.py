@@ -25,10 +25,8 @@ except ImportError:
     causal_conv1d_fn = None
 
 
-def _l2norm_torch(x, eps=1e-6):
-    """PyTorch-native L2 normalization to avoid NaN on NPU backward."""
-    norm = torch.norm(x, p=2, dim=-1, keepdim=True).clamp(min=eps)
-    return x / norm
+# L2 normalization is now handled by TE-FL kernel internally
+# No need for manual preprocessing here
 
 
 def gated_delta_net_forward(
@@ -119,10 +117,8 @@ def gated_delta_net_forward(
     key = key.reshape(batch, seq_len, -1, self.key_head_dim)
     value = value.reshape(batch, seq_len, -1, self.value_head_dim)
 
-    # Apply L2 norm using NPU-safe implementation
-    if self.use_qk_l2norm:
-        query = _l2norm_torch(query.contiguous())
-        key = _l2norm_torch(key.contiguous())
+    # L2 norm will be handled by TE-FL kernel if use_qk_l2norm=True
+    # No manual preprocessing needed here
 
     if self.num_value_heads // self.num_key_heads > 1:
         query = query.repeat_interleave(self.num_value_heads // self.num_key_heads, dim=2)
@@ -156,7 +152,7 @@ def gated_delta_net_forward(
             beta=beta,
             initial_state=None,
             output_final_state=False,
-            use_qk_l2norm=False,  # Already applied externally
+            use_qk_l2norm=self.use_qk_l2norm,  # Let TE-FL kernel handle L2 norm
         )
     else:
         # Fallback to PyTorch implementation for deterministic mode
