@@ -183,6 +183,21 @@ register(
 # SSM - gated_delta_net
 # =============================================================================
 register(
+    target="megatron.core.ssm.gated_delta_net.GatedDeltaNet.__init__",
+    impl="megatron.plugin.Ascend.ssm.gated_delta_net.gated_delta_net_init",
+    vendor="npu",
+)
+register(
+    target="megatron.core.ssm.gated_delta_net.GatedDeltaNet.reset_parameters",
+    impl="megatron.plugin.Ascend.ssm.gated_delta_net.reset_parameters",
+    vendor="npu",
+)
+register(
+    target="megatron.core.ssm.gated_delta_net.GatedDeltaNet._apply_gated_norm",
+    impl="megatron.plugin.Ascend.ssm.gated_delta_net._apply_gated_norm",
+    vendor="npu",
+)
+register(
     target="megatron.core.ssm.gated_delta_net.GatedDeltaNet.forward",
     impl="megatron.plugin.Ascend.ssm.gated_delta_net.gated_delta_net_forward",
     vendor="npu",

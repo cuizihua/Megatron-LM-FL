@@ -75,6 +75,7 @@ class GatedDeltaNet(MegatronModule):
     and returns output of the same size.
     """
 
+    @overridable
     def __init__(
         self,
         config: TransformerConfig,
@@ -229,6 +230,7 @@ class GatedDeltaNet(MegatronModule):
 
         self.reset_parameters()
 
+    @overridable
     def reset_parameters(self):
         """Reset the parameters."""
         if self.config.perform_initialization:
@@ -609,8 +611,13 @@ def torch_chunk_gated_delta_rule(
 
     initial_dtype = query.dtype
     if use_qk_l2norm_in_kernel:
-        query = l2norm(query, dim=-1, eps=1e-6)
-        key = l2norm(key, dim=-1, eps=1e-6)
+        # Use PyTorch-native l2norm instead of fla's triton kernel
+        # which produces NaN in backward on Ascend NPU
+        def _l2norm_torch(x, dim=-1, eps=1e-6):
+            norm = torch.norm(x, p=2, dim=dim, keepdim=True).clamp(min=eps)
+            return x / norm
+        query = _l2norm_torch(query, dim=-1, eps=1e-6)
+        key = _l2norm_torch(key, dim=-1, eps=1e-6)
     query, key, value, beta, g = [
         x.transpose(1, 2).contiguous().to(torch.float32) for x in (query, key, value, beta, g)
     ]
