@@ -23,9 +23,21 @@ logger = logging.getLogger(__name__)
 try:
     from transformer_engine.plugin.core.manager import OpManager
     HAVE_TE_PLUGIN = True
+    # Create a singleton OpManager instance at module level
+    # This avoids re-initialization on every forward pass
+    _OP_MANAGER_SINGLETON = None
+
+    def get_op_manager():
+        """Get or create the singleton OpManager instance."""
+        global _OP_MANAGER_SINGLETON
+        if _OP_MANAGER_SINGLETON is None:
+            _OP_MANAGER_SINGLETON = OpManager()
+            logger.info("[FlagScale GDN Plugin] OpManager singleton created")
+        return _OP_MANAGER_SINGLETON
 except ImportError:
     HAVE_TE_PLUGIN = False
     OpManager = None
+    get_op_manager = None
 
 try:
     from causal_conv1d import causal_conv1d_fn
@@ -341,11 +353,8 @@ def gated_delta_net_forward(
     # Use TE Plugin for NPU-optimized implementation
     # TE Plugin will try to use AscendC kernel first, then fallback to PyTorch if needed
     if HAVE_TE_PLUGIN and not self.config.deterministic_mode:
-        logger.info("[FlagScale GDN Plugin] Using TE-FL OpManager to call gated_delta_net_forward")
-        logger.info("[FlagScale GDN Plugin] Input shapes: query=%s, key=%s, value=%s, g=%s, beta=%s",
-                   query.shape, key.shape, value.shape, g.shape, beta.shape)
-
-        op_manager = OpManager()
+        # Use singleton OpManager to avoid re-initialization overhead
+        op_manager = get_op_manager()
         core_attn_out, last_recurrent_state = op_manager.call(
             "gated_delta_net_forward",
             query=query,
@@ -358,12 +367,7 @@ def gated_delta_net_forward(
             use_qk_l2norm=False,  # L2 norm already applied above
             chunk_size=64,
         )
-        logger.info("[FlagScale GDN Plugin] ✓ OpManager.call completed successfully, output shape: %s",
-                   core_attn_out.shape)
     else:
-        logger.warning("[FlagScale GDN Plugin] TE Plugin not available or deterministic mode enabled, "
-                      "using PyTorch fallback (HAVE_TE_PLUGIN=%s, deterministic_mode=%s)",
-                      HAVE_TE_PLUGIN, self.config.deterministic_mode)
         # Fallback to PyTorch implementation for deterministic mode
         from megatron.core.ssm.gated_delta_net import torch_chunk_gated_delta_rule
         core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
@@ -371,9 +375,6 @@ def gated_delta_net_forward(
             initial_state=None, output_final_state=False,
             use_qk_l2norm_in_kernel=False,  # L2 norm already applied above
         )
-        logger.info("[FlagScale GDN Plugin] ✓ PyTorch fallback completed, output shape: %s",
-                   core_attn_out.shape)
-
     nvtx_range_pop(suffix="gated_delta_rule")
 
     # RMSNorm with gating
